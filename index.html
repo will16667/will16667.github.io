@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>蕃茄時鐘 + To-Do</title>
+<title>蕃茄時鐘 + To-Do（含分類分頁）</title>
 <style>
 :root{
   --bg: 240 10% 6%;
@@ -232,11 +232,11 @@ ul.tasks{
 }
 .title{
   flex:1; outline:none;
-  writing-mode: horizontal-tb;   /* ← 修正有時候文字被打直 */
+  writing-mode: horizontal-tb;
   white-space: normal;
 }
 .icon-btn{
-  background:transparent !important;  /* ← 避免整顆變成粉紅色 */
+  background:transparent !important;
   border:none;
   color:hsl(var(--fg-dim));
   cursor:pointer;
@@ -304,6 +304,33 @@ ul.subtasks{
   background:hsl(var(--card) / .4);
   border-radius:8px; padding:6px 8px;
 }
+
+/* Category tabs */
+.cat-tabs{
+  display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px;
+}
+.cat-tabs button{
+  border:none;
+  padding:6px 10px;
+  border-radius:999px;
+  background:hsl(var(--card) / .5);
+  color:hsl(var(--fg-dim));
+  cursor:pointer; transition:.15s;
+}
+.cat-tabs button.active{
+  background:hsl(var(--accent));
+  color:#fff;
+}
+.cat-tabs .add{
+  background:hsl(var(--card) / .2);
+  color:hsl(var(--fg-dim));
+}
+.cat-tabs .cat-close{
+  margin-left:4px;
+  cursor:pointer;
+  opacity:.6;
+}
+.cat-tabs .cat-close:hover{ opacity:1; }
 
 /* Responsive */
 @media (max-width: 1024px){
@@ -385,6 +412,10 @@ ul.subtasks{
       <h2 style="margin:0 0 8px;">To-Do List
         <span class="badge" id="countBadge">0 / 0</span>
       </h2>
+
+      <!-- 分類分頁 -->
+      <div class="cat-tabs" id="catTabs"></div>
+
       <form id="todoForm">
         <input type="text" id="todoInput" placeholder="輸入任務，Enter 新增…" autocomplete="off">
         <button type="submit">新增</button>
@@ -442,6 +473,7 @@ const els = {
   countBadge: document.getElementById('countBadge'),
   statsToday: document.getElementById('statsToday'),
   statsTotal: document.getElementById('statsTotal'),
+  catTabs: document.getElementById('catTabs'),
 };
 
 const defaultSettings = {
@@ -472,16 +504,18 @@ let stats = loadStats();
 let workLog = loadLog();
 updateStatsView();
 
-// 追蹤目前拖曳的是什麼
-let dragState = null; // { type:'task', taskId } | { type:'subtask', parentId, subId }
+let dragState = null;
 
+// === 分類（分頁） ===
+let categories = loadCategories();
+let currentCatId = loadCurrentCatId() || categories[0].id;
+
+/* -------------------- Audio -------------------- */
 function initAudio() {
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
 }
-
-/* -------------------- Audio -------------------- */
 function playTick() {
   if (!S.tickOn || !audioCtx) return;
   const osc = audioCtx.createOscillator();
@@ -494,7 +528,6 @@ function playTick() {
   osc.start();
   osc.stop(audioCtx.currentTime + 0.02);
 }
-
 function playAlarm() {
   if (!audioCtx) return;
   const now = audioCtx.currentTime;
@@ -532,14 +565,11 @@ function setMode(newMode, fromAuto=false) {
   }
   document.title = `(${minutes}:00) ${titleFor(mode)} - 蕃茄時鐘`;
 
-  if (mode === 'work' && !currentTaskId) {
-    autoPickNextTask();
-  }
+  if (mode === 'work' && !currentTaskId) autoPickNextTask();
 }
 function titleFor(mode){
   return mode === 'work' ? '工作' : (mode === 'short' ? '短休息' : '長休息');
 }
-
 function startPause() {
   initAudio();
   if (running) {
@@ -569,9 +599,7 @@ function tick() {
     if (remaining < 0) remaining = 0;
     updateDisplay();
     updateRing();
-    if (remaining > 0) {
-      playTick();
-    }
+    if (remaining > 0) playTick();
     if (remaining === 0) {
       clearInterval(intervalId);
       running = false;
@@ -713,13 +741,101 @@ function toggleTheme(){
 els.themeToggle.addEventListener('click', toggleTheme);
 toggleTheme();
 
+/* -------------------- Categories（分頁） -------------------- */
+function loadCategories(){
+  try{
+    const c = JSON.parse(localStorage.getItem('pomodoro_categories'));
+    if (Array.isArray(c) && c.length) return c;
+  }catch(e){}
+  // 預設
+  return [
+    { id: 'inbox',  name: '一般' },
+    { id: 'study',  name: '學習' },
+    { id: 'work',   name: '工作' },
+  ];
+}
+function saveCategories(){
+  localStorage.setItem('pomodoro_categories', JSON.stringify(categories));
+}
+function loadCurrentCatId(){
+  return localStorage.getItem('pomodoro_current_cat');
+}
+function saveCurrentCatId(){
+  localStorage.setItem('pomodoro_current_cat', currentCatId);
+}
+function renderCategoryTabs(){
+  const ct = els.catTabs;
+  ct.innerHTML = '';
+  categories.forEach(cat=>{
+    const btn = document.createElement('button');
+    btn.textContent = cat.name;
+    btn.dataset.id = cat.id;
+    btn.className = cat.id === currentCatId ? 'active' : '';
+    btn.addEventListener('click', ()=>{
+      currentCatId = cat.id;
+      saveCurrentCatId();
+      renderCategoryTabs();
+      renderTodos();
+    });
+    // 雙擊改名
+    btn.addEventListener('dblclick', ()=>{
+      const newName = prompt('新的分類名稱：', cat.name);
+      if (!newName) return;
+      cat.name = newName.trim() || cat.name;
+      saveCategories();
+      renderCategoryTabs();
+    });
+    // Alt+Click 刪除（保留至少 1 個）
+    btn.addEventListener('click', (e)=>{
+      if (e.altKey) {
+        if (!confirm(`刪除分類「${cat.name}」？（該分類下的任務也會被刪除）`)) return;
+        if (categories.length === 1) return alert('至少要留一個分類');
+        // 刪除該分類 & 任務
+        categories = categories.filter(c=>c.id!==cat.id);
+        todos = todos.filter(t=>t.categoryId !== cat.id);
+        if (!categories.find(c=>c.id===currentCatId)) {
+          currentCatId = categories[0].id;
+          saveCurrentCatId();
+        }
+        saveCategories(); saveTodos();
+        renderCategoryTabs(); renderTodos();
+      }
+    });
+    ct.appendChild(btn);
+  });
+
+  const addBtn = document.createElement('button');
+  addBtn.className = 'add';
+  addBtn.textContent = '＋';
+  addBtn.title = '新增分類';
+  addBtn.addEventListener('click', ()=>{
+    const name = prompt('分類名稱：');
+    if (!name) return;
+    const id = crypto.randomUUID();
+    categories.push({ id, name: name.trim() });
+    currentCatId = id;
+    saveCategories();
+    saveCurrentCatId();
+    renderCategoryTabs();
+    renderTodos();
+  });
+  ct.appendChild(addBtn);
+}
+
 /* -------------------- To-Do（含子任務 & 雙向拖放） -------------------- */
 let todos = loadTodos();
+renderCategoryTabs();
 renderTodos();
 
 function loadTodos(){
   try{
-    return JSON.parse(localStorage.getItem('pomodoro_todos')) || [];
+    const list = JSON.parse(localStorage.getItem('pomodoro_todos')) || [];
+    // 舊資料（沒有 categoryId）→ 預設丟到 currentCatId（或 inbox）
+    const def = categories[0]?.id || 'inbox';
+    list.forEach(t=>{
+      if (!t.categoryId) t.categoryId = def;
+    });
+    return list;
   }catch(e){
     return [];
   }
@@ -729,7 +845,7 @@ function saveTodos(){
 }
 function addTodo(title){
   if (!title.trim()) return;
-  todos.push({ id: crypto.randomUUID(), title: title.trim(), done: false, pomos: 0, subtasks: [] });
+  todos.push({ id: crypto.randomUUID(), title: title.trim(), done: false, pomos: 0, subtasks: [], categoryId: currentCatId });
   saveTodos();
   renderTodos();
 }
@@ -791,12 +907,19 @@ function editSubtaskTitle(parentId, subId, newTitle){
     saveTodos();
   }
 }
+function changeTaskCategory(taskId, catId){
+  const t = todos.find(t=>t.id===taskId);
+  if (!t) return;
+  t.categoryId = catId;
+  saveTodos();
+  renderTodos();
+}
 function setCurrentTask(id){
   currentTaskId = id;
   renderTodos();
 }
 function autoPickNextTask(){
-  const next = todos.find(t=>!t.done);
+  const next = todos.find(t=>!t.done && t.categoryId === currentCatId);
   currentTaskId = next ? next.id : null;
   renderTodos();
 }
@@ -829,10 +952,12 @@ function onWorkPomodoroFinished(){
 function renderTodos(){
   els.tasks.innerHTML = '';
   const frag = document.createDocumentFragment();
-  const doneCount = todos.filter(t=>t.done).length;
-  els.countBadge.textContent = `${doneCount} / ${todos.length}`;
 
-  todos.forEach(t=>{
+  const list = todos.filter(t=>t.categoryId === currentCatId);
+  const doneCount = list.filter(t=>t.done).length;
+  els.countBadge.textContent = `${doneCount} / ${list.length}`;
+
+  list.forEach(t=>{
     const wrapper = document.createElement('li');
     wrapper.dataset.id = t.id;
     wrapper.classList.toggle('current', t.id === currentTaskId);
@@ -865,6 +990,16 @@ function renderTodos(){
     pomo.className = 'pomo-badge';
     pomo.textContent = `🍅 ${t.pomos||0}`;
 
+    // 分類下拉（移動任務）
+    const catSel = document.createElement('select');
+    categories.forEach(c=>{
+      const opt = document.createElement('option');
+      opt.value = c.id; opt.textContent = c.name;
+      if (c.id === t.categoryId) opt.selected = true;
+      catSel.appendChild(opt);
+    });
+    catSel.addEventListener('change', ()=>changeTaskCategory(t.id, catSel.value));
+
     const toggleSubBtn = document.createElement('button');
     toggleSubBtn.className = 'icon-btn';
     toggleSubBtn.innerHTML = '📂';
@@ -882,7 +1017,7 @@ function renderTodos(){
     del.title = '刪除';
     del.addEventListener('click', ()=>deleteTodo(t.id));
 
-    row.append(handle, cb, span, pomo, toggleSubBtn, setBtn, del);
+    row.append(handle, cb, span, pomo, catSel, toggleSubBtn, setBtn, del);
     wrapper.appendChild(row);
 
     // 子任務區
@@ -1020,7 +1155,10 @@ function getDragAfterElement(container, y){
 function reorderTodosByTaskDOM(){
   const order = Array.from(els.tasks.children).map(li=>li.dataset.id);
   const map = new Map(todos.map(t=>[t.id, t]));
-  todos = order.map(id=>map.get(id));
+  const filtered = todos.filter(t=>t.categoryId === currentCatId);
+  const others = todos.filter(t=>t.categoryId !== currentCatId);
+  const reordered = order.map(id=>map.get(id));
+  todos = [...reordered, ...others];
   saveTodos();
   renderTodos();
 }
@@ -1031,7 +1169,6 @@ function setupAllSubtasksDnD(){
   lists.forEach(list=>{
     const targetParentId = list.dataset.parent;
 
-    // 允許任意子任務（不論原父）或任務丟進來
     list.addEventListener('dragover', e=>{
       if (!dragState) return;
       if (dragState.type === 'subtask' || dragState.type === 'task') {
@@ -1039,7 +1176,6 @@ function setupAllSubtasksDnD(){
         const after = getDragAfterElementSub(list, e.clientY);
         const dragging = list.querySelector('.dragging');
         if (dragging && dragging.closest('ul.subtasks') === list) {
-          // 僅在同列表內可視化 reorder
           if (after == null) list.appendChild(dragging);
           else list.insertBefore(dragging, after);
         }
@@ -1060,7 +1196,6 @@ function setupAllSubtasksDnD(){
     });
   });
 
-  // 子任務拖到最外層 → 升級為主任務
   enableOuterDropForSubtasks();
 }
 function calcInsertIndexInSubList(list, afterElement){
@@ -1090,7 +1225,6 @@ function reorderSubtasksByDOM(parentId, listEl){
   saveTodos();
   renderTodos();
 }
-
 function enableOuterDropForSubtasks(){
   const outer = els.tasks;
 
@@ -1114,8 +1248,6 @@ function enableOuterDropForSubtasks(){
     }
   });
 }
-
-/* === 核心：轉換 / 搬移 === */
 function convertSubtaskToTask(parentId, subId, insertIndex){
   const p = todos.find(t=>t.id===parentId);
   if (!p) return;
@@ -1128,44 +1260,41 @@ function convertSubtaskToTask(parentId, subId, insertIndex){
     title: s.title,
     done: s.done || false,
     pomos: 0,
-    subtasks: []
+    subtasks: [],
+    categoryId: currentCatId   // 升級後放到目前分類
   };
 
-  if (insertIndex >= todos.length) todos.push(newTask);
-  else todos.splice(insertIndex, 0, newTask);
+  const list = todos.filter(t=>t.categoryId === currentCatId);
+  const others = todos.filter(t=>t.categoryId !== currentCatId);
+  if (insertIndex >= list.length) list.push(newTask);
+  else list.splice(insertIndex, 0, newTask);
+  todos = [...list, ...others];
 
   saveTodos();
   renderTodos();
 }
-
 function convertTaskToSubtask(taskId, targetParentId, insertIndex){
   const taskIdx = todos.findIndex(t=>t.id===taskId);
   const parent = todos.find(t=>t.id===targetParentId);
   if (taskIdx === -1 || !parent) return;
 
   const t = todos.splice(taskIdx,1)[0];
-
-  // 這裡簡化處理：把原主任務轉為一個單純的子任務（其原本的子任務不跟過來）
   const newSub = { id: t.id, title: t.title, done: t.done || false };
   const subs = parent.subtasks || (parent.subtasks = []);
   if (insertIndex >= subs.length) subs.push(newSub);
   else subs.splice(insertIndex, 0, newSub);
 
-  // 如果它是 currentTask，把焦點移掉
   if (currentTaskId === t.id) currentTaskId = null;
 
   saveTodos();
   renderTodos();
 }
-
 function moveSubtaskToAnotherParent(fromParentId, toParentId, subId, insertIndex){
-  // 同一個父：純 reorder
   if (fromParentId === toParentId){
     const list = document.querySelector(`ul.subtasks[data-parent="${fromParentId}"]`);
     reorderSubtasksByDOM(fromParentId, list);
     return;
   }
-
   const from = todos.find(t=>t.id===fromParentId);
   const to   = todos.find(t=>t.id===toParentId);
   if (!from || !to) return;
@@ -1236,12 +1365,14 @@ function saveLog(){
 /* -------------------- Export / Import -------------------- */
 els.exportBtn.addEventListener('click', ()=>{
   const data = {
-    version: 2,
+    version: 3,
     exportedAt: new Date().toISOString(),
     settings: S,
     stats,
     todos,
-    workLog
+    workLog,
+    categories,
+    currentCatId
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
@@ -1261,13 +1392,16 @@ els.importFile.addEventListener('change', async (e)=>{
   try{
     const text = await file.text();
     const obj = JSON.parse(text);
-    if (!confirm('確定要以匯入檔覆蓋目前的設定 / 任務 / 統計 / 紀錄？')) return;
+    if (!confirm('確定要以匯入檔覆蓋目前的設定 / 任務 / 統計 / 紀錄 / 分類？')) return;
 
     if (obj.settings) { S = {...defaultSettings, ...obj.settings}; saveSettings(); syncSettingsUI(); }
     if (obj.stats) { stats = obj.stats; saveStats(); updateStatsView(); }
     if (obj.todos) { todos = obj.todos; saveTodos(); }
     if (obj.workLog) { workLog = obj.workLog; saveLog(); }
+    if (obj.categories) { categories = obj.categories; saveCategories(); }
+    if (obj.currentCatId) { currentCatId = obj.currentCatId; saveCurrentCatId(); }
 
+    renderCategoryTabs();
     currentTaskId = null;
     autoPickNextTask();
     setMode('work');
