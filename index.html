@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>蕃茄時鐘 + To-Do（含分類分頁）</title>
+<title>蕃茄時鐘 + To-Do（含分類分頁 & 注解）</title>
 <style>
 :root{
   --bg: 240 10% 6%;
@@ -305,6 +305,38 @@ ul.subtasks{
   border-radius:8px; padding:6px 8px;
 }
 
+/* Notes */
+.note-wrap{
+  background:hsl(var(--card) / .25);
+  border:1px solid hsl(0 0% 100% / .04);
+  border-radius:8px;
+  padding:8px;
+  margin:4px 0 0 24px;
+}
+.note-wrap.task{
+  margin-left:0;
+}
+.note-wrap textarea{
+  width:100%;
+  min-height:80px;
+  border:none;
+  border-radius:6px;
+  padding:8px;
+  background:hsl(var(--card) / .4);
+  color:hsl(var(--fg));
+  resize:vertical;
+}
+.note-preview{
+  margin-top:6px;
+  font-size:.9rem;
+  color:hsl(var(--fg-dim));
+  word-break: break-word;
+}
+.note-preview a{
+  color:hsl(var(--accent));
+  text-decoration:underline;
+}
+
 /* Category tabs */
 .cat-tabs{
   display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px;
@@ -510,11 +542,17 @@ let dragState = null;
 let categories = loadCategories();
 let currentCatId = loadCurrentCatId() || categories[0].id;
 
+/* -------------------- Helpers -------------------- */
+function linkify(str=''){
+  return (str||'')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') // escape
+    .replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>')
+    .replace(/\n/g,'<br>');
+}
+
 /* -------------------- Audio -------------------- */
 function initAudio() {
-  if (!audioCtx) {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  }
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 }
 function playTick() {
   if (!S.tickOn || !audioCtx) return;
@@ -747,7 +785,6 @@ function loadCategories(){
     const c = JSON.parse(localStorage.getItem('pomodoro_categories'));
     if (Array.isArray(c) && c.length) return c;
   }catch(e){}
-  // 預設
   return [
     { id: 'inbox',  name: '一般' },
     { id: 'study',  name: '學習' },
@@ -777,7 +814,6 @@ function renderCategoryTabs(){
       renderCategoryTabs();
       renderTodos();
     });
-    // 雙擊改名
     btn.addEventListener('dblclick', ()=>{
       const newName = prompt('新的分類名稱：', cat.name);
       if (!newName) return;
@@ -785,12 +821,10 @@ function renderCategoryTabs(){
       saveCategories();
       renderCategoryTabs();
     });
-    // Alt+Click 刪除（保留至少 1 個）
     btn.addEventListener('click', (e)=>{
       if (e.altKey) {
         if (!confirm(`刪除分類「${cat.name}」？（該分類下的任務也會被刪除）`)) return;
         if (categories.length === 1) return alert('至少要留一個分類');
-        // 刪除該分類 & 任務
         categories = categories.filter(c=>c.id!==cat.id);
         todos = todos.filter(t=>t.categoryId !== cat.id);
         if (!categories.find(c=>c.id===currentCatId)) {
@@ -822,7 +856,7 @@ function renderCategoryTabs(){
   ct.appendChild(addBtn);
 }
 
-/* -------------------- To-Do（含子任務 & 雙向拖放） -------------------- */
+/* -------------------- To-Do（含子任務 & 雙向拖放 & 注解） -------------------- */
 let todos = loadTodos();
 renderCategoryTabs();
 renderTodos();
@@ -830,10 +864,13 @@ renderTodos();
 function loadTodos(){
   try{
     const list = JSON.parse(localStorage.getItem('pomodoro_todos')) || [];
-    // 舊資料（沒有 categoryId）→ 預設丟到 currentCatId（或 inbox）
     const def = categories[0]?.id || 'inbox';
     list.forEach(t=>{
       if (!t.categoryId) t.categoryId = def;
+      if (typeof t.note !== 'string') t.note = '';
+      t.subtasks?.forEach(s=>{
+        if (typeof s.note !== 'string') s.note = '';
+      });
     });
     return list;
   }catch(e){
@@ -845,14 +882,14 @@ function saveTodos(){
 }
 function addTodo(title){
   if (!title.trim()) return;
-  todos.push({ id: crypto.randomUUID(), title: title.trim(), done: false, pomos: 0, subtasks: [], categoryId: currentCatId });
+  todos.push({ id: crypto.randomUUID(), title: title.trim(), done: false, pomos: 0, subtasks: [], categoryId: currentCatId, note:'' });
   saveTodos();
   renderTodos();
 }
 function addSubtask(parentId, title){
   const t = todos.find(t=>t.id===parentId);
   if (!t || !title.trim()) return;
-  t.subtasks.push({ id: crypto.randomUUID(), title: title.trim(), done: false });
+  t.subtasks.push({ id: crypto.randomUUID(), title: title.trim(), done: false, note:'' });
   saveTodos();
   renderTodos();
 }
@@ -990,7 +1027,6 @@ function renderTodos(){
     pomo.className = 'pomo-badge';
     pomo.textContent = `🍅 ${t.pomos||0}`;
 
-    // 分類下拉（移動任務）
     const catSel = document.createElement('select');
     categories.forEach(c=>{
       const opt = document.createElement('option');
@@ -999,6 +1035,11 @@ function renderTodos(){
       catSel.appendChild(opt);
     });
     catSel.addEventListener('change', ()=>changeTaskCategory(t.id, catSel.value));
+
+    const noteBtn = document.createElement('button');
+    noteBtn.className = 'icon-btn';
+    noteBtn.innerHTML = '📝';
+    noteBtn.title = '顯示 / 收起注解';
 
     const toggleSubBtn = document.createElement('button');
     toggleSubBtn.className = 'icon-btn';
@@ -1017,88 +1058,35 @@ function renderTodos(){
     del.title = '刪除';
     del.addEventListener('click', ()=>deleteTodo(t.id));
 
-    row.append(handle, cb, span, pomo, catSel, toggleSubBtn, setBtn, del);
+    row.append(handle, cb, span, pomo, catSel, noteBtn, toggleSubBtn, setBtn, del);
     wrapper.appendChild(row);
 
-    // 子任務區
-    const subsWrap = document.createElement('div');
-    subsWrap.style.marginTop = '4px';
-
-    const subList = document.createElement('ul');
-    subList.className = 'subtasks';
-    subList.dataset.parent = t.id;
-
-    t.subtasks?.forEach(s=>{
-      const li = document.createElement('li');
-      li.className = 'sub-row';
-      li.dataset.subId = s.id;
-      li.dataset.parentId = t.id;
-      li.draggable = true;
-
-      const subHandle = document.createElement('span');
-      subHandle.className = 'drag-handle';
-      subHandle.textContent = '⠿';
-
-      const scb = document.createElement('input');
-      scb.type = 'checkbox';
-      scb.checked = s.done;
-      scb.addEventListener('change',()=>toggleSubtask(t.id, s.id));
-
-      const stitle = document.createElement('span');
-      stitle.className = 'title';
-      stitle.contentEditable = true;
-      stitle.textContent = s.title;
-      stitle.addEventListener('blur', ()=>editSubtaskTitle(t.id, s.id, stitle.textContent));
-      stitle.addEventListener('keydown', e=>{
-        if (e.key === 'Enter') { e.preventDefault(); stitle.blur(); }
-      });
-
-      const sdel = document.createElement('button');
-      sdel.className = 'icon-btn';
-      sdel.innerHTML = '🗑️';
-      sdel.title = '刪除子任務';
-      sdel.addEventListener('click', ()=>deleteSubtask(t.id, s.id));
-
-      li.addEventListener('dragstart', (e)=>{
-        dragState = { type:'subtask', parentId: t.id, subId: s.id };
-        li.classList.add('dragging');
-        e.dataTransfer.effectAllowed = 'move';
-      });
-      li.addEventListener('dragend', ()=>{
-        li.classList.remove('dragging');
-        dragState = null;
-      });
-
-      li.append(subHandle, scb, stitle, sdel);
-      subList.appendChild(li);
+    /* --- 任務注解 --- */
+    const noteWrap = document.createElement('div');
+    noteWrap.className = 'note-wrap task hide';
+    const ta = document.createElement('textarea');
+    ta.value = t.note || '';
+    const prev = document.createElement('div');
+    prev.className = 'note-preview';
+    prev.innerHTML = linkify(t.note || '');
+    ta.addEventListener('input', ()=>{
+      t.note = ta.value;
+      prev.innerHTML = linkify(t.note);
+      saveTodos();
     });
+    noteWrap.appendChild(ta);
+    noteWrap.appendChild(prev);
+    noteBtn.addEventListener('click', ()=>noteWrap.classList.toggle('hide'));
+    wrapper.appendChild(noteWrap);
 
-    const subForm = document.createElement('form');
-    subForm.style.display = 'flex';
-    subForm.style.gap = '6px';
-    subForm.style.marginTop = '4px';
-    const subInput = document.createElement('input');
-    subInput.type = 'text';
-    subInput.placeholder = '新增子任務…';
-    subInput.style.flex = '1';
-    const subBtn = document.createElement('button');
-    subBtn.type = 'submit';
-    subBtn.textContent = '+';
-    subForm.append(subInput, subBtn);
-    subForm.addEventListener('submit', e=>{
-      e.preventDefault();
-      addSubtask(t.id, subInput.value);
-      subInput.value = '';
-    });
-
-    subsWrap.appendChild(subList);
-    subsWrap.appendChild(subForm);
+    /* --- 子任務區 --- */
+    const subsWrap = createSubtasksUI(t);
     subsWrap.classList.remove('hide');
     toggleSubBtn.addEventListener('click', ()=>{
       subsWrap.classList.toggle('hide');
     });
-
     wrapper.appendChild(subsWrap);
+
     frag.appendChild(wrapper);
   });
 
@@ -1106,6 +1094,110 @@ function renderTodos(){
 
   setupDragAndDropTasks();
   setupAllSubtasksDnD();
+}
+
+function createSubtasksUI(task){
+  const subsWrap = document.createElement('div');
+  subsWrap.style.marginTop = '4px';
+
+  const subList = document.createElement('ul');
+  subList.className = 'subtasks';
+  subList.dataset.parent = task.id;
+
+  task.subtasks?.forEach(s=>{
+    const li = document.createElement('li');
+    li.className = 'sub-row';
+    li.dataset.subId = s.id;
+    li.dataset.parentId = task.id;
+    li.draggable = true;
+
+    const subHandle = document.createElement('span');
+    subHandle.className = 'drag-handle';
+    subHandle.textContent = '⠿';
+
+    const scb = document.createElement('input');
+    scb.type = 'checkbox';
+    scb.checked = s.done;
+    scb.addEventListener('change',()=>toggleSubtask(task.id, s.id));
+
+    const stitle = document.createElement('span');
+    stitle.className = 'title';
+    stitle.contentEditable = true;
+    stitle.textContent = s.title;
+    stitle.addEventListener('blur', ()=>editSubtaskTitle(task.id, s.id, stitle.textContent));
+    stitle.addEventListener('keydown', e=>{
+      if (e.key === 'Enter') { e.preventDefault(); stitle.blur(); }
+    });
+
+    const sNoteBtn = document.createElement('button');
+    sNoteBtn.className = 'icon-btn';
+    sNoteBtn.innerHTML = '📝';
+    sNoteBtn.title = '顯示 / 收起注解';
+
+    const sdel = document.createElement('button');
+    sdel.className = 'icon-btn';
+    sdel.innerHTML = '🗑️';
+    sdel.title = '刪除子任務';
+    sdel.addEventListener('click', ()=>deleteSubtask(task.id, s.id));
+
+    li.addEventListener('dragstart', (e)=>{
+      dragState = { type:'subtask', parentId: task.id, subId: s.id };
+      li.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    li.addEventListener('dragend', ()=>{
+      li.classList.remove('dragging');
+      dragState = null;
+    });
+
+    li.append(subHandle, scb, stitle, sNoteBtn, sdel);
+    subList.appendChild(li);
+
+    // 子任務注解
+    const sNoteWrap = document.createElement('div');
+    sNoteWrap.className = 'note-wrap hide';
+    const sta = document.createElement('textarea');
+    sta.value = s.note || '';
+    const sprev = document.createElement('div');
+    sprev.className = 'note-preview';
+    sprev.innerHTML = linkify(s.note || '');
+    sta.addEventListener('input', ()=>{
+      s.note = sta.value;
+      sprev.innerHTML = linkify(s.note);
+      saveTodos();
+    });
+    sNoteWrap.appendChild(sta);
+    sNoteWrap.appendChild(sprev);
+
+    sNoteBtn.addEventListener('click', ()=>sNoteWrap.classList.toggle('hide'));
+
+    // 把子任務的 note wrap 接在 li 後面
+    const noteContainer = document.createElement('div');
+    noteContainer.appendChild(sNoteWrap);
+    subList.appendChild(noteContainer);
+  });
+
+  const subForm = document.createElement('form');
+  subForm.style.display = 'flex';
+  subForm.style.gap = '6px';
+  subForm.style.marginTop = '4px';
+  const subInput = document.createElement('input');
+  subInput.type = 'text';
+  subInput.placeholder = '新增子任務…';
+  subInput.style.flex = '1';
+  const subBtn = document.createElement('button');
+  subBtn.type = 'submit';
+  subBtn.textContent = '+';
+  subForm.append(subInput, subBtn);
+  subForm.addEventListener('submit', e=>{
+    e.preventDefault();
+    addSubtask(task.id, subInput.value);
+    subInput.value = '';
+  });
+
+  subsWrap.appendChild(subList);
+  subsWrap.appendChild(subForm);
+  return subsWrap;
 }
 
 els.form.addEventListener('submit', e=>{
@@ -1261,7 +1353,8 @@ function convertSubtaskToTask(parentId, subId, insertIndex){
     done: s.done || false,
     pomos: 0,
     subtasks: [],
-    categoryId: currentCatId   // 升級後放到目前分類
+    categoryId: currentCatId,
+    note: s.note || ''
   };
 
   const list = todos.filter(t=>t.categoryId === currentCatId);
@@ -1279,7 +1372,7 @@ function convertTaskToSubtask(taskId, targetParentId, insertIndex){
   if (taskIdx === -1 || !parent) return;
 
   const t = todos.splice(taskIdx,1)[0];
-  const newSub = { id: t.id, title: t.title, done: t.done || false };
+  const newSub = { id: t.id, title: t.title, done: t.done || false, note: t.note || '' };
   const subs = parent.subtasks || (parent.subtasks = []);
   if (insertIndex >= subs.length) subs.push(newSub);
   else subs.splice(insertIndex, 0, newSub);
@@ -1365,7 +1458,7 @@ function saveLog(){
 /* -------------------- Export / Import -------------------- */
 els.exportBtn.addEventListener('click', ()=>{
   const data = {
-    version: 3,
+    version: 4,
     exportedAt: new Date().toISOString(),
     settings: S,
     stats,
@@ -1396,10 +1489,21 @@ els.importFile.addEventListener('change', async (e)=>{
 
     if (obj.settings) { S = {...defaultSettings, ...obj.settings}; saveSettings(); syncSettingsUI(); }
     if (obj.stats) { stats = obj.stats; saveStats(); updateStatsView(); }
-    if (obj.todos) { todos = obj.todos; saveTodos(); }
+    if (obj.todos) { todos = obj.todos; }
     if (obj.workLog) { workLog = obj.workLog; saveLog(); }
     if (obj.categories) { categories = obj.categories; saveCategories(); }
     if (obj.currentCatId) { currentCatId = obj.currentCatId; saveCurrentCatId(); }
+
+    // 兼容：補 note / categoryId
+    const def = categories[0]?.id || 'inbox';
+    todos.forEach(t=>{
+      if (!t.categoryId) t.categoryId = def;
+      if (typeof t.note !== 'string') t.note = '';
+      t.subtasks?.forEach(s=>{
+        if (typeof s.note !== 'string') s.note = '';
+      });
+    });
+    saveTodos();
 
     renderCategoryTabs();
     currentTaskId = null;
